@@ -100,6 +100,22 @@ input { font-family: inherit; }
   border-radius: 8px; padding: 6px 10px; font-size: 11px; font-family: var(--font-mono);
 }
 .tb-timebtn:active { background: var(--gold); color: #1a1305; }
+.tb-timebtn.playing { background: rgba(76,175,125,0.2); border-color: var(--good); color: var(--good); }
+
+/* unidades militares */
+.unit-row { background: var(--panel-alt); border-radius: 8px; padding: 9px 10px; margin-bottom: 8px; }
+.unit-info { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.unit-icon { font-size: 16px; }
+.unit-name { flex: 1; font-size: 12.5px; font-weight: 600; }
+.unit-count { font-family: var(--font-mono); color: var(--cyan); font-size: 12.5px; }
+.unit-buy { display: flex; gap: 6px; }
+.unit-qty-input {
+  width: 70px; padding: 8px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--text); font-size: 12px;
+}
+.btn-secondary.small.active { border-color: var(--gold); color: var(--gold); }
+.build-row { margin-bottom: 10px; }
+.build-benefit { margin-top: 2px; }
 
 /* ---------- conteúdo ---------- */
 #screen-content { flex: 1; overflow-y: auto; padding: 12px 12px 90px; }
@@ -2283,12 +2299,33 @@ input[type="range"]::-moz-range-thumb {
     }));
   }
 
-  function genBranch(id, key, basePower, techLevel, stability) {
-    const size = clamp(basePower * jitter(id, key + "sz", 0.25), 1, 100);
-    const training = clamp(40 + techLevel * 0.3 + stability * 0.2 + (seededRand(id, key + "tr") - 0.5) * 20, 5, 98);
-    const equipment = clamp(30 + techLevel * 0.5 + (seededRand(id, key + "eq") - 0.5) * 20, 5, 98);
-    const morale = clamp(45 + stability * 0.3 + (seededRand(id, key + "mo") - 0.5) * 25, 5, 98);
-    return { size: Math.round(size), training: Math.round(training), equipment: Math.round(equipment), morale: Math.round(morale) };
+  function genUnits(id, basePower, population, militaryTechLevel, landlocked) {
+    const popMult = clamp(Math.pow(population / 40, 0.35), 0.25, 4.5);
+    const techMult = 0.6 + militaryTechLevel / 130;
+    return {
+      soldados: { count: Math.max(200, Math.round(basePower * 5200 * popMult * jitter(id, "u_sold", 0.25))) },
+      tanques: { count: Math.max(0, Math.round(basePower * 5.5 * popMult * jitter(id, "u_tank", 0.3))) },
+      artilharia: { count: Math.max(0, Math.round(basePower * 7 * popMult * jitter(id, "u_art", 0.3))) },
+      drones: { count: Math.max(0, Math.round(basePower * 2.8 * techMult * jitter(id, "u_dron", 0.35))) },
+      aeronaves: { count: Math.max(0, Math.round(basePower * 2 * techMult * jitter(id, "u_air", 0.3))) },
+      navios: { count: landlocked ? 0 : Math.max(0, Math.round(basePower * 0.85 * techMult * jitter(id, "u_navy", 0.35))) },
+    };
+  }
+
+  function genSectors(id, gdp, archetype, resources) {
+    const has = (list) => resources.some((r) => list.indexOf(r) !== -1);
+    const advanced = ["superpotencia", "potencia_avancada", "avancada_pequena", "microestado_rico"].indexOf(archetype) !== -1;
+    return {
+      industrial: { share: clamp((advanced ? 0.2 : 0.16) * jitter(id, "s_ind", 0.3), 0.05, 0.4) },
+      agro: { share: clamp((has(["terras_agricolas", "agricultura", "soja", "graos"]) ? 0.14 : 0.05) * jitter(id, "s_agro", 0.35), 0.01, 0.28) },
+      comercio: { share: clamp(0.15 * jitter(id, "s_com", 0.3), 0.05, 0.3) },
+      servicos: { share: clamp((advanced ? 0.28 : 0.18) * jitter(id, "s_serv", 0.25), 0.08, 0.4) },
+      digital: { share: clamp((advanced ? 0.09 : 0.03) * jitter(id, "s_dig", 0.4), 0.005, 0.2) },
+      saude_privada: { share: clamp(0.05 * jitter(id, "s_sau", 0.3), 0.01, 0.14) },
+      petroleo_gas: { share: has(["petroleo", "gas"]) ? clamp(0.16 * jitter(id, "s_oil", 0.4), 0.04, 0.4) : 0 },
+      automotivo: { share: clamp((advanced || archetype === "emergente_grande" ? 0.05 : 0.015) * jitter(id, "s_auto", 0.5), 0.002, 0.14) },
+      turismo: { share: clamp((has(["turismo"]) ? 0.09 : 0.02) * jitter(id, "s_tur", 0.4), 0.005, 0.22) },
+    };
   }
 
   // ---------- montagem de um país ----------
@@ -2318,6 +2355,9 @@ input[type="range"]::-moz-range-thumb {
       fuel: clamp(tier.tax.fuel * jitter(id, "tfuel", 0.3), 0, 0.2),
       wealth: 0,
     };
+    // divide o imposto de renda único em 3 faixas (baixa/média/alta) - cada uma tem sua
+    // própria base tributável e seu próprio efeito de aprovação (ver politics.js)
+    const incomeBrackets = deep.incomeBrackets || { low: taxRates.income * 0.7, medium: taxRates.income, high: taxRates.income * 1.4 };
 
     let spendingShare = { health: 0.14, education: 0.12, defense: 0.06, infrastructure: 0.1, security: 0.05, pension: 0.14, welfare: 0.09, science: 0.02, transport: 0.05, energy: 0.03, admin: 0.06 };
     if (deep.spendingShare) {
@@ -2341,16 +2381,11 @@ input[type="range"]::-moz-range-thumb {
     const milGdpShare = deep.militaryGdpShare != null ? deep.militaryGdpShare : clamp(tier.milShare * jitter(id, "milshare", 0.3), 0.002, 0.15);
     const basePower = clamp(Math.log10(Math.max(1, gdp)) * 14 * (milGdpShare / (tier.milShare || 0.015)), 2, 100);
     const landlocked = !!geo.landlocked;
-    const branches = {
-      army: genBranch(id, "army", basePower * 1.1, militaryTechLevel, stability),
-      navy: genBranch(id, "navy", landlocked ? basePower * 0.05 : basePower * 0.8, militaryTechLevel, stability),
-      airforce: genBranch(id, "airforce", basePower * 0.85, militaryTechLevel, stability),
-      specialForces: genBranch(id, "specialForces", basePower * 0.5, militaryTechLevel, stability),
-      reserves: genBranch(id, "reserves", basePower * 0.7, militaryTechLevel, stability * 0.8),
-      airDefense: genBranch(id, "airDefense", basePower * 0.6, militaryTechLevel, stability),
-      intelligence: genBranch(id, "intelligence", basePower * 0.55, militaryTechLevel, stability),
-      logistics: genBranch(id, "logistics", basePower * 0.65, militaryTechLevel, stability),
-      industry: genBranch(id, "industry", basePower * 0.5, techLevel, stability),
+    const units = genUnits(id, basePower, population, militaryTechLevel, landlocked);
+    const readiness = {
+      training: Math.round(clamp(40 + militaryTechLevel * 0.3 + stability * 0.2 + (seededRand(id, "rd_tr") - 0.5) * 20, 5, 98)),
+      equipment: Math.round(clamp(30 + militaryTechLevel * 0.5 + (seededRand(id, "rd_eq") - 0.5) * 20, 5, 98)),
+      morale: Math.round(clamp(45 + stability * 0.3 + (seededRand(id, "rd_mo") - 0.5) * 25, 5, 98)),
     };
 
     const isNuclearState = NUCLEAR_STATES.indexOf(id) !== -1;
@@ -2389,6 +2424,7 @@ input[type="range"]::-moz-range-thumb {
       govType,
       resources,
       alliances,
+      _landlocked: landlocked,
       economy: {
         gdp, growth: deep.growth != null ? deep.growth : clamp(0.02 * jitter(id, "growth", 1.2), -0.03, 0.09),
         inflation: deep.inflation != null ? deep.inflation : clamp(0.04 * jitter(id, "infl", 1.0), 0.005, 0.6),
@@ -2397,7 +2433,7 @@ input[type="range"]::-moz-range-thumb {
         currency, tradeBalance: 0, exports: gdp * 0.25 * jitter(id, "exp", 0.4), imports: gdp * 0.24 * jitter(id, "imp", 0.4),
       },
       fiscal: {
-        taxRates, spendingShare, debtToGdp,
+        taxRates, incomeBrackets, spendingShare, debtToGdp,
         spendingGdp: (function () {
           const gs = deep.govSizeGdp != null ? deep.govSizeGdp : clamp(tier.govSize * jitter(id, "govsize", 0.2), 0.08, 0.62);
           const out = {};
@@ -2413,17 +2449,21 @@ input[type="range"]::-moz-range-thumb {
         policyRate: 0.05, inflationTarget: 0.03,
       },
       approval, stability,
+      approvalGroups: { low: approval, medium: approval, high: approval },
       government: {
         termYears, noCompetitiveElections, monthsUntilElection: termYears * 12,
         regimeBias: rules.bias || 0,
       },
+      laws: { leiSegurancaNacional: false, reformaTrabalhista: false, modeloEconomico: "misto" },
       parties,
       military: {
-        branches, budgetShareOfGdp: milGdpShare,
+        units, readiness, budgetShareOfGdp: milGdpShare,
         allocation: { training: 0.2, maintenance: 0.25, recruitment: 0.15, modernization: 0.25, logistics: 0.1, infrastructure: 0.05 },
         techLevel: militaryTechLevel, nuclear,
       },
       technology: { civilian: civilianTech, military: militaryTechTree },
+      espionage: { points: 0, counterIntel: clamp(militaryTechLevel * jitter(id, "cintel", 0.3), 5, 95) },
+      sectors: genSectors(id, gdp, archetype, resources),
       aiProfile: {
         aggression: clamp(seededRand(id, "aggr") * (archetype === "conflito" || archetype === "fechado" ? 0.8 : 0.5), 0.05, 0.95),
         isolationism: clamp(seededRand(id, "isol") * (govType === "comunista" || govType === "autoritario" ? 0.7 : 0.4), 0.02, 0.9),
@@ -2492,15 +2532,19 @@ input[type="range"]::-moz-range-thumb {
 
     const tech = country.technology.civilian;
     const techBonus = ((tech.computing + tech.ai + tech.energy) / 300) * 0.012;
+    const buildingsGrowth = root.WP.Buildings ? root.WP.Buildings.growthContribution(country) : 0;
     const investmentRatio = e.investment / Math.max(0.01, e.gdp);
     const investmentGap = investmentRatio - 0.2;
     const realInterest = country.centralBank.policyRate - e.inflation;
     const stabilityEffect = ((country.stability - 50) / 50) * 0.012;
     const debtDrag = f.debtToGdp > 0.9 ? (f.debtToGdp - 0.9) * 0.012 : 0;
-    const taxDrag = Math.max(0, f.taxRates.corporate + f.taxRates.income - 0.55) * 0.02;
+    const model = country.laws ? country.laws.modeloEconomico : "misto";
+    const taxDragThreshold = model === "liberal" ? 0.68 : 0.55;
+    const taxDrag = Math.max(0, f.taxRates.corporate + f.incomeBrackets.medium - taxDragThreshold) * 0.02;
+    const modelGrowthBonus = model === "liberal" ? 0.003 : model === "nacionalista" ? 0.0015 : 0;
 
     let growthTarget =
-      0.018 + techBonus + investmentGap * 0.05 - realInterest * 0.3 + stabilityEffect - debtDrag - taxDrag - warPenalty - sanctionsPenalty;
+      0.018 + techBonus + buildingsGrowth + modelGrowthBonus + investmentGap * 0.05 - realInterest * 0.3 + stabilityEffect - debtDrag - taxDrag - warPenalty - sanctionsPenalty;
     growthTarget = clamp(growthTarget, -0.18, 0.15);
     e.growth = clamp(e.growth + (growthTarget - e.growth) * 0.18 + (Math.random() - 0.5) * 0.004, -0.25, 0.2);
 
@@ -2516,7 +2560,8 @@ input[type="range"]::-moz-range-thumb {
 
     if (country._unemploymentBase == null) country._unemploymentBase = e.unemployment;
     const growthGap = e.growth - 0.02;
-    const unemploymentTarget = clamp(country._unemploymentBase - growthGap * 0.6, 0.01, 0.65);
+    const laborReformBonus = country.laws && country.laws.reformaTrabalhista ? 0.018 : 0;
+    const unemploymentTarget = clamp(country._unemploymentBase - growthGap * 0.6 - laborReformBonus, 0.01, 0.65);
     e.unemployment = clamp(e.unemployment + (unemploymentTarget - e.unemployment) * 0.15, 0.01, 0.65);
 
     const rateDiff = country.centralBank.policyRate - 0.04;
@@ -2525,7 +2570,7 @@ input[type="range"]::-moz-range-thumb {
     e.currency.exchangeRate = clamp(e.currency.exchangeRate * (1 + fxPressure * 0.05), 0.05, 6);
     e.currency.confidence = clamp(e.currency.confidence + fxPressure * 8 + (country.stability - 50) * 0.02, 3, 99);
 
-    const competitiveness = clamp(1 / e.currency.exchangeRate, 0.25, 3.5);
+    const competitiveness = clamp((1 / e.currency.exchangeRate) * (1 + (root.WP.Buildings ? root.WP.Buildings.tradeBonus(country) : 0)), 0.25, 4.5);
     e.exports = Math.max(0.01, e.gdp * 0.22 * competitiveness * (1 - Math.min(0.6, f.taxRates.exportTariff)));
     e.imports = Math.max(0.01, e.gdp * 0.22 * (1 / competitiveness) * (1 - Math.min(0.6, f.taxRates.importTariff * 1.4)));
     e.tradeBalance = e.exports - e.imports;
@@ -2533,6 +2578,13 @@ input[type="range"]::-moz-range-thumb {
     e.consumption = e.gdp * clamp(0.58 + (0.1 - f.taxRates.vat) * 0.5, 0.32, 0.78);
     e.investment = e.gdp * clamp(0.2 + investmentGap * 0.3 - realInterest * 0.5, 0.04, 0.48);
     e.productivity = clamp(e.productivity * (1 + techBonus * 0.3), 20, 400);
+
+    // população cresce sozinha com o tempo - mais rápido em países pobres (transição
+    // demográfica), quase estagnado ou levemente negativo em países muito ricos.
+    const gdpPerCapitaUsd = (e.gdp / Math.max(0.01, country.population)) * 1000;
+    let popGrowthAnnual = clamp(0.028 - gdpPerCapitaUsd / 2200000, -0.006, 0.032);
+    popGrowthAnnual *= clamp(country.stability / 70, 0.5, 1.15);
+    country.population = Math.max(0.01, country.population * (1 + popGrowthAnnual / 12));
   };
 
   // Aplica um choque instantâneo (usado por eventos/crises/guerra)
@@ -2559,11 +2611,17 @@ input[type="range"]::-moz-range-thumb {
 
   Fiscal.computeRevenue = function (country) {
     const e = country.economy,
-      t = country.fiscal.taxRates;
+      t = country.fiscal.taxRates,
+      br = country.fiscal.incomeBrackets;
     const cap = country.fiscal.taxCapacity != null ? country.fiscal.taxCapacity : 0.6;
     const laborBase = 0.4,
       capitalBase = 0.16;
-    const income = e.gdp * laborBase * t.income * cap;
+    // faixas de renda: baixa (~45% da massa salarial), média (~35%), alta (~20%) - cada
+    // uma com sua própria alíquota e seu próprio efeito de aprovação (ver politics.js)
+    const incomeLow = e.gdp * laborBase * 0.45 * br.low * cap;
+    const incomeMedium = e.gdp * laborBase * 0.35 * br.medium * cap;
+    const incomeHigh = e.gdp * laborBase * 0.2 * br.high * cap;
+    const income = incomeLow + incomeMedium + incomeHigh;
     const corporate = e.gdp * capitalBase * t.corporate * cap;
     const vat = e.consumption * t.vat * cap;
     const importT = e.imports * t.importTariff;
@@ -2577,7 +2635,7 @@ input[type="range"]::-moz-range-thumb {
     const oilStateRevenue = hasOilGas ? e.gdp * (country.archetype === "petromonarquia" ? 0.14 : 0.05) : 0;
     const other = e.gdp * 0.005;
     return {
-      income, corporate, vat, importT, exportT, fuel, wealth, resourceRoyalties, oilStateRevenue, other,
+      income, incomeLow, incomeMedium, incomeHigh, corporate, vat, importT, exportT, fuel, wealth, resourceRoyalties, oilStateRevenue, other,
       total: income + corporate + vat + importT + exportT + fuel + wealth + resourceRoyalties + oilStateRevenue + other,
     };
   };
@@ -2664,14 +2722,49 @@ input[type="range"]::-moz-range-thumb {
     const stabilityScore = (country.stability - 50) * 0.25;
     const warScore = ctx.atWar ? -8 : 0;
     const prestigeScore = (ctx.avgRelation || 0) * 0.08;
+    const lawScore = (country.laws && country.laws.leiSegurancaNacional ? -2 : 0) + (country.laws && country.laws.modeloEconomico === "nacionalista" ? 1.5 : 0);
 
-    let target = 50 + growthScore + inflationScore + unemploymentScore + stabilityScore + warScore + prestigeScore;
+    let target = 50 + growthScore + inflationScore + unemploymentScore + stabilityScore + warScore + prestigeScore + lawScore;
     target = clamp(target, 2, 98);
     country.approval = clamp(country.approval + (target - country.approval) * 0.1 + (Math.random() - 0.5) * 1.2, 1, 99);
 
-    // instabilidade: aprovação muito baixa por muito tempo corrói a estabilidade institucional
+    // grupos de renda convergem lentamente para a aprovação geral, mas recebem golpes
+    // diretos quando o jogador mexe na alíquota da própria faixa (ver applyBracketTaxChange)
+    if (country.approvalGroups) {
+      ["low", "medium", "high"].forEach((g) => {
+        country.approvalGroups[g] = clamp(country.approvalGroups[g] + (target - country.approvalGroups[g]) * 0.04, 1, 99);
+      });
+      if (country.laws) {
+        if (country.laws.modeloEconomico === "liberal") {
+          country.approvalGroups.high = clamp(country.approvalGroups.high + 0.05, 0, 100);
+          country.approvalGroups.low = clamp(country.approvalGroups.low - 0.02, 0, 100);
+        } else if (country.laws.modeloEconomico === "socialista") {
+          country.approvalGroups.low = clamp(country.approvalGroups.low + 0.06, 0, 100);
+          country.approvalGroups.high = clamp(country.approvalGroups.high - 0.03, 0, 100);
+        }
+      }
+      country.approval = clamp(0.55 * country.approval + 0.45 * (0.45 * country.approvalGroups.low + 0.35 * country.approvalGroups.medium + 0.2 * country.approvalGroups.high), 1, 99);
+    }
+
+    if (country.laws && country.laws.leiSegurancaNacional) country.stability = clamp(country.stability + 0.02, 0, 100);
+
     if (country.approval < 20) country.stability = clamp(country.stability - 0.08, 0, 100);
     if (country.approval > 65 && country.stability < 90) country.stability = clamp(country.stability + 0.03, 0, 100);
+  };
+
+  // Chamado quando o jogador muda a alíquota de UMA faixa de renda específica. O impacto
+  // atinge sobretudo aquele grupo, escala com o tamanho da mudança E com o nível já
+  // vigente (um aumento de 1pp dói pouco a 5%, dói muito a 45%).
+  Politics.applyBracketTaxChange = function (country, bracket, diff) {
+    if (!country.approvalGroups) return;
+    const level = country.fiscal.incomeBrackets[bracket];
+    const sensitivity = 1 + level * 4.5;
+    const hit = -diff * 240 * sensitivity;
+    country.approvalGroups[bracket] = clamp(country.approvalGroups[bracket] + hit, 1, 99);
+  };
+
+  Politics.setEconomicModel = function (country, model) {
+    country.laws.modeloEconomico = model;
   };
 
   // Congresso: mudanças pequenas passam direto (prerrogativa executiva/orçamentária normal);
@@ -2875,8 +2968,9 @@ input[type="range"]::-moz-range-thumb {
 
     /* ---- js/engine/military.js ---- */
     // js/engine/military.js
-// Forças separadas por ramo. Comprar equipamento sem manutenção/treino/logística
-// correspondente NÃO aumenta a capacidade real proporcionalmente (ver seção 18 do briefing).
+// Forças reais por tipo de unidade (não mais um "tamanho" abstrato por ramo).
+// Comprar unidades sem manter o orçamento de manutenção/treino faz a prontidão cair,
+// e sem verba de recrutamento suficiente as forças encolhem (não é só "+equipamento").
 (function (root) {
   root.WP = root.WP || {};
   const Military = (root.WP.Military = {});
@@ -2884,41 +2978,66 @@ input[type="range"]::-moz-range-thumb {
     return Math.max(lo, Math.min(hi, v));
   }
 
+  // baseCost/upkeep em bilhões USD por unidade/ano. power = contribuição relativa de força.
+  Military.UNIT_TYPES = {
+    soldados: { label: "Soldados", baseCost: 0.00007, upkeep: 0.000015, power: 1, icon: "🪖" },
+    tanques: { label: "Tanques", baseCost: 0.007, upkeep: 0.0007, power: 14, icon: "🛡" },
+    artilharia: { label: "Artilharia", baseCost: 0.0035, upkeep: 0.0004, power: 9, icon: "💣" },
+    drones: { label: "Drones militares", baseCost: 0.004, upkeep: 0.0004, power: 7, icon: "🛩" },
+    aeronaves: { label: "Aeronaves de combate", baseCost: 0.09, upkeep: 0.007, power: 42, icon: "✈️" },
+    navios: { label: "Navios de guerra", baseCost: 0.55, upkeep: 0.022, power: 95, icon: "🚢" },
+  };
+
+  Military.unitCost = function (country, key) {
+    const def = Military.UNIT_TYPES[key];
+    return def.baseCost * (0.55 + country.military.techLevel / 100);
+  };
+
+  // Compra imediata de unidades (financiada por reservas, ou dívida se faltar - nunca bloqueia).
+  Military.buyUnits = function (country, key, qty) {
+    const def = Military.UNIT_TYPES[key];
+    if (!def || qty <= 0) return null;
+    if (key === "navios" && country._landlocked) return { blocked: true, reason: "País sem litoral não pode ter marinha." };
+    const unitCost = Military.unitCost(country, key);
+    const totalCost = unitCost * qty;
+    const reserves = country.economy.currency.reserves;
+    if (reserves >= totalCost) country.economy.currency.reserves -= totalCost;
+    else {
+      country.economy.currency.reserves = 0;
+      country.fiscal.debtToGdp += (totalCost - reserves) / country.economy.gdp;
+    }
+    country.military.units[key].count += qty;
+    return { key, qty, totalCost, newCount: country.military.units[key].count };
+  };
+
   Military.monthlyTick = function (country) {
     const m = country.military;
     const annualBudget = country.economy.gdp * m.budgetShareOfGdp;
     const alloc = m.allocation;
-    const totalSize = Object.values(m.branches).reduce((s, b) => s + b.size, 0) || 1;
+    const totalUnits = Object.values(m.units).reduce((s, u) => s + u.count, 0) || 1;
 
-    const neededMaintenance = totalSize * 0.9; // "unidades" de manutenção necessárias por ano
+    const upkeepNeeded = Object.keys(m.units).reduce((s, k) => s + m.units[k].count * Military.UNIT_TYPES[k].upkeep, 0);
     const maintenanceBudget = annualBudget * alloc.maintenance;
-    const maintenanceRatio = clamp(maintenanceBudget / Math.max(1, neededMaintenance), 0, 2);
+    const maintenanceRatio = clamp(maintenanceBudget / Math.max(0.001, upkeepNeeded), 0, 2);
 
-    const modernizationBudget = annualBudget * alloc.modernization;
-    const modPerUnit = modernizationBudget / totalSize;
-
-    const trainingBudget = annualBudget * alloc.training;
-    const trainPerUnit = trainingBudget / totalSize;
-
-    const recruitBudget = annualBudget * alloc.recruitment;
-    const recruitRatio = recruitBudget / Math.max(1, totalSize * 0.3);
-
+    const modBudget = annualBudget * alloc.modernization;
+    const trainBudget = annualBudget * alloc.training;
     const logisticsBudget = annualBudget * alloc.logistics;
-    const logisticsRatio = clamp(logisticsBudget / Math.max(1, totalSize * 0.2), 0, 2);
+    const recruitBudget = annualBudget * alloc.recruitment;
 
-    Object.keys(m.branches).forEach((key) => {
-      const b = m.branches[key];
-      const equipDelta = modPerUnit * 6 + (maintenanceRatio - 1) * 4; // manutenção fraca corrói equipamento
-      const trainDelta = trainPerUnit * 8 - 1.5;
-      const moraleDelta = (country.stability - 50) * 0.02 + (maintenanceRatio > 0.8 ? 0.3 : -0.8);
-      b.equipment = clamp(b.equipment + equipDelta / 12, 3, 100);
-      b.training = clamp(b.training + trainDelta / 12, 3, 100);
-      b.morale = clamp(b.morale + moraleDelta / 3, 3, 100);
-      const sizeTarget = recruitRatio > 1.1 ? b.size * 1.004 : recruitRatio < 0.6 ? b.size * 0.997 : b.size;
-      b.size = clamp(sizeTarget, 1, 100);
+    m.readiness.equipment = clamp(m.readiness.equipment + ((modBudget / totalUnits) * 1400 + (maintenanceRatio - 1) * 4) / 12, 3, 100);
+    m.readiness.training = clamp(m.readiness.training + ((trainBudget / totalUnits) * 1600 - 1.4) / 12, 3, 100);
+    m.readiness.morale = clamp(m.readiness.morale + ((country.stability - 50) * 0.02 + (maintenanceRatio > 0.75 ? 0.3 : -0.9)) / 3, 3, 100);
+
+    const upkeepAffordability = maintenanceRatio;
+    const recruitCapacity = recruitBudget / Math.max(0.01, Military.unitCost(country, "soldados"));
+    Object.keys(m.units).forEach((k) => {
+      const u = m.units[k];
+      if (upkeepAffordability < 0.55) u.count = Math.floor(u.count * 0.995);
+      if (k === "soldados" && recruitCapacity > 0) u.count = Math.round(u.count + recruitCapacity * 0.02);
     });
 
-    m.logisticsRatio = logisticsRatio;
+    m.logisticsRatio = clamp(0.4 + (logisticsBudget / Math.max(1, totalUnits * 0.0004)) * 0.02 + (root.WP.Buildings ? root.WP.Buildings.logisticsBonus(country) : 0), 0.2, 2.2);
     m.maintenanceRatio = maintenanceRatio;
     if (m.nuclear.programMonthsLeft > 0) {
       m.nuclear.programMonthsLeft -= 1;
@@ -2928,6 +3047,15 @@ input[type="range"]::-moz-range-thumb {
       }
     }
     m.powerIndex = Military.powerIndex(country);
+  };
+
+  Military.powerIndex = function (country) {
+    const m = country.military;
+    const rawPower = Object.keys(m.units).reduce((s, k) => s + m.units[k].count * Military.UNIT_TYPES[k].power, 0);
+    const readinessMultiplier = (m.readiness.training + m.readiness.equipment + m.readiness.morale) / 300;
+    const techMultiplier = 0.5 + m.techLevel / 100;
+    const nuclearBonus = m.nuclear && m.nuclear.hasWeapons ? 15 : 0;
+    return Math.round((rawPower / 6000) * readinessMultiplier * techMultiplier * (m.logisticsRatio || 1) + nuclearBonus);
   };
 
   Military.startNuclearProgram = function (state, country) {
@@ -2942,26 +3070,14 @@ input[type="range"]::-moz-range-thumb {
     return true;
   };
 
-  Military.powerIndex = function (country) {
-    const m = country.military;
-    const b = m.branches;
-    const logisticsMultiplier = 0.45 + clamp(m.logisticsRatio != null ? m.logisticsRatio : 1, 0, 2) * 0.35;
-    const branchScore = (br) => br.size * ((br.training + br.equipment + br.morale) / 300);
-    const raw =
-      branchScore(b.army) * 1.0 +
-      branchScore(b.navy) * 0.8 +
-      branchScore(b.airforce) * 0.9 +
-      branchScore(b.specialForces) * 0.4 +
-      branchScore(b.airDefense) * 0.5 +
-      branchScore(b.intelligence) * 0.3;
-    const techMultiplier = 0.5 + m.techLevel / 100;
-    const nuclearBonus = m.nuclear && m.nuclear.hasWeapons ? 15 : 0;
-    return Math.round(raw * techMultiplier * logisticsMultiplier + nuclearBonus);
-  };
-
   Military.setAllocation = function (country, alloc) {
-    const sum = Object.values(alloc).reduce((a, b) => a + b, 0) || 1;
-    Object.keys(alloc).forEach((k) => (country.military.allocation[k] = alloc[k] / sum));
+    const keys = Object.keys(alloc);
+    const sum = Object.values(alloc).reduce((a, b) => a + b, 0);
+    if (sum <= 0.0005) {
+      keys.forEach((k) => (country.military.allocation[k] = 1 / keys.length));
+    } else {
+      keys.forEach((k) => (country.military.allocation[k] = alloc[k] / sum));
+    }
   };
 })(typeof window !== "undefined" ? window : global);
 
@@ -2978,18 +3094,20 @@ input[type="range"]::-moz-range-thumb {
   }
 
   Technology.monthlyTick = function (country) {
+    const researchMult = root.WP.Buildings ? root.WP.Buildings.researchMultiplier(country) : 1;
     const sciBudget = (country.economy.gdp * country.fiscal.spendingGdp.science) / 12;
     const civFields = Object.keys(country.technology.civilian);
-    const perField = sciBudget / civFields.length;
+    const perField = (sciBudget / civFields.length) * researchMult;
     civFields.forEach((f) => {
       const level = country.technology.civilian[f];
       const diminishing = Math.max(0.08, 1 - level / 110);
-      country.technology.civilian[f] = clamp(level + perField * 0.35 * diminishing, 1, 99);
+      const spaceBonus = f === "space" && root.WP.Buildings ? root.WP.Buildings.spaceLevel(country) * 0.15 : 0;
+      country.technology.civilian[f] = clamp(level + perField * 0.35 * diminishing + spaceBonus, 1, 99);
     });
 
     const milBudget = (country.economy.gdp * country.military.budgetShareOfGdp * country.military.allocation.modernization * 0.4) / 12;
     const milFields = Object.keys(country.technology.military);
-    const perMilField = milBudget / milFields.length;
+    const perMilField = (milBudget / milFields.length) * researchMult;
     milFields.forEach((f) => {
       const level = country.technology.military[f];
       const diminishing = Math.max(0.08, 1 - level / 110);
@@ -3003,8 +3121,10 @@ input[type="range"]::-moz-range-thumb {
 
     /* ---- js/engine/events.js ---- */
     // js/engine/events.js
-// Crises são sorteadas a partir do estado real do país (inflação, aprovação, estabilidade
-// etc.), nunca puramente aleatórias, e toda escolha aplica custo/risco/consequência.
+// Crises nascem majoritariamente de DECISÕES do jogador (registradas em state.recentActions),
+// não de sorteio puro. Ainda existe uma chance ambiente pequena (choques exógenos realistas:
+// desastre natural, pandemia), mas o grosso do risco é causado pelo que você faz. Também
+// há cooldown por tipo pra não repetir a mesma crise toda hora.
 (function (root) {
   root.WP = root.WP || {};
   const Events = (root.WP.Events = {});
@@ -3016,10 +3136,56 @@ input[type="range"]::-moz-range-thumb {
     return (country.resources || []).some((r) => list.indexOf(r) !== -1);
   }
 
+  // Registra uma ação do jogador que pode, mais tarde, causar uma crise coerente com ela.
+  Events.logAction = function (state, tag, magnitude) {
+    state.recentActions = state.recentActions || [];
+    state.recentActions.push({ tag, magnitude, month: state.time.year * 12 + state.time.month });
+    if (state.recentActions.length > 60) state.recentActions.shift();
+  };
+
+  Events.recentActionMagnitude = function (state, tag, withinMonths) {
+    const nowM = state.time.year * 12 + state.time.month;
+    return (state.recentActions || [])
+      .filter((a) => a.tag === tag && nowM - a.month <= withinMonths)
+      .reduce((s, a) => s + a.magnitude, 0);
+  };
+
+  Events.recentlyFired = function (state, typeId, months) {
+    const nowM = state.time.year * 12 + state.time.month;
+    return (state.events.log || []).some((e) => e.typeId === typeId && nowM - (e.year * 12 + e.month) <= months);
+  };
+
   const TYPES = [
     {
+      id: "revolta_social_baixa_renda", label: "Revolta social - renda baixa",
+      trigger: (c, s) => (Events.recentlyFired(s, "revolta_social_baixa_renda", 8) ? 0 : Events.recentActionMagnitude(s, "tax_hike_low", 10) * 3.2 + (c.approvalGroups.low < 25 ? 0.02 : 0)),
+      choices: (c) => [
+        { label: "Reverter parte do aumento", cost: 0, risk: "médio",
+          shortTerm: ["Aprovação (renda baixa) +8", "Receita cai um pouco"], longTerm: ["Tensão social baixa"],
+          apply: (c) => { c.approvalGroups.low = clamp(c.approvalGroups.low + 8, 0, 100); c.fiscal.incomeBrackets.low = Math.max(0, c.fiscal.incomeBrackets.low - 0.02); } },
+        { label: "Reprimir os protestos", cost: 0, risk: "alto",
+          shortTerm: ["Ordem restabelecida à força"], longTerm: ["Estabilidade cai", "Ressentimento dura mais"],
+          apply: (c) => { c.stability = clamp(c.stability - 7, 0, 100); c.approvalGroups.low = clamp(c.approvalGroups.low - 4, 0, 100); } },
+        { label: "Compensar com transferência de renda", cost: c.economy.gdp * 0.006, risk: "médio",
+          shortTerm: ["Gasto social +"], longTerm: ["Aprovação recupera parcialmente"],
+          apply: (c) => { c.approvalGroups.low = clamp(c.approvalGroups.low + 5, 0, 100); c.fiscal.debtToGdp += 0.004; } },
+      ],
+    },
+    {
+      id: "fuga_capital_elite", label: "Fuga de capital - alta renda/empresarial",
+      trigger: (c, s) => (Events.recentlyFired(s, "fuga_capital_elite", 8) ? 0 : Events.recentActionMagnitude(s, "tax_hike_high", 10) * 2.6 + Events.recentActionMagnitude(s, "nationalize", 10) * 1.8),
+      choices: (c) => [
+        { label: "Dar garantias e incentivos ao capital", cost: 0, risk: "médio",
+          shortTerm: ["Aprovação (renda alta) +6"], longTerm: ["Investimento se recupera"],
+          apply: (c) => { c.approvalGroups.high = clamp(c.approvalGroups.high + 6, 0, 100); c.economy.investment *= 1.03; } },
+        { label: "Manter o curso (deixar sair quem quiser)", cost: 0, risk: "alto",
+          shortTerm: ["Sem custo político imediato"], longTerm: ["Investimento e câmbio pioram"],
+          apply: (c) => { c.economy.currency.confidence = clamp(c.economy.currency.confidence - 6, 0, 100); c.economy.investment *= 0.95; } },
+      ],
+    },
+    {
       id: "crise_economica", label: "Crise econômica",
-      trigger: (c) => (c.economy.inflation > 0.18 || c.economy.growth < -0.035 ? 0.09 : 0.008),
+      trigger: (c, s) => (Events.recentlyFired(s, "crise_economica", 10) ? 0 : (c.economy.inflation > 0.2 || c.economy.growth < -0.04 ? 0.05 : 0.004) + Events.recentActionMagnitude(s, "spending_cut", 8) * 1.2),
       choices: (c) => [
         { label: "Pacote de austeridade", cost: 0, risk: "médio",
           shortTerm: ["Aprovação -6", "Desemprego temporário +1pp"], longTerm: ["Dívida estabiliza", "Confiança na moeda melhora"],
@@ -3034,7 +3200,7 @@ input[type="range"]::-moz-range-thumb {
     },
     {
       id: "crise_energetica", label: "Crise energética",
-      trigger: (c) => (!hasResourceLike(c, ["petroleo", "gas", "carvao"]) && c.economy.inflation > 0.06 ? 0.035 : 0.006),
+      trigger: (c, s) => (Events.recentlyFired(s, "crise_energetica", 10) ? 0 : !hasResourceLike(c, ["petroleo", "gas", "carvao"]) && c.economy.inflation > 0.08 ? 0.02 : 0.003),
       choices: (c) => [
         { label: "Subsidiar energia", cost: c.economy.gdp * 0.01, risk: "médio",
           shortTerm: ["Aprovação +4", "Gasto público +"], longTerm: ["Pressão fiscal", "Dependência de subsídio"],
@@ -3042,14 +3208,14 @@ input[type="range"]::-moz-range-thumb {
         { label: "Repassar custo ao consumidor", cost: 0, risk: "médio",
           shortTerm: ["Aprovação -5", "Inflação +"], longTerm: ["Contas públicas preservadas"],
           apply: (c) => { c.approval = clamp(c.approval - 5, 0, 100); c.economy.inflation += 0.015; } },
-        { label: "Racionamento controlado", cost: 0, risk: "alto",
-          shortTerm: ["Produção cai", "Aprovação -3"], longTerm: ["Evita crise cambial imediata"],
-          apply: (c) => { c.approval = clamp(c.approval - 3, 0, 100); c.economy.growth -= 0.01; } },
+        { label: "Acelerar usinas de energia", cost: 0, risk: "baixo",
+          shortTerm: ["Sem efeito imediato"], longTerm: ["Reduz recorrência desta crise"],
+          apply: () => {} },
       ],
     },
     {
       id: "pandemia", label: "Surto sanitário",
-      trigger: () => 0.004,
+      trigger: (c, s) => (Events.recentlyFired(s, "pandemia", 24) ? 0 : 0.0025),
       choices: (c) => [
         { label: "Lockdown rígido", cost: c.economy.gdp * 0.02, risk: "alto",
           shortTerm: ["Economia -", "Aprovação mista"], longTerm: ["Menos mortes/estabilidade preservada"],
@@ -3061,7 +3227,7 @@ input[type="range"]::-moz-range-thumb {
     },
     {
       id: "crise_diplomatica", label: "Crise diplomática",
-      trigger: (c, s) => (Object.keys(s.relations).some((k) => k.split("_").includes(c.id) && s.relations[k].value < -60) ? 0.05 : 0.005),
+      trigger: (c, s) => (Events.recentlyFired(s, "crise_diplomatica", 8) ? 0 : Object.keys(s.relations).some((k) => k.split("_").includes(c.id) && s.relations[k].value < -60) ? 0.03 : 0.003),
       choices: (c) => [
         { label: "Buscar mediação internacional", cost: 0, risk: "baixo",
           shortTerm: ["Prestígio +"], longTerm: ["Relação melhora lentamente"],
@@ -3073,7 +3239,7 @@ input[type="range"]::-moz-range-thumb {
     },
     {
       id: "protestos", label: "Protestos populares",
-      trigger: (c) => (c.approval < 30 ? 0.09 : 0.01),
+      trigger: (c, s) => (Events.recentlyFired(s, "protestos", 6) ? 0 : c.approval < 28 ? 0.06 : 0.004),
       choices: (c) => [
         { label: "Diálogo e concessões", cost: c.economy.gdp * 0.005, risk: "baixo",
           shortTerm: ["Aprovação +5"], longTerm: ["Pequena pressão fiscal"],
@@ -3088,7 +3254,7 @@ input[type="range"]::-moz-range-thumb {
     },
     {
       id: "corrupcao", label: "Escândalo de corrupção",
-      trigger: (c) => (c.stability < 50 ? 0.035 : 0.01),
+      trigger: (c, s) => (Events.recentlyFired(s, "corrupcao", 12) ? 0 : (c.stability < 45 ? 0.02 : 0.005) + Events.recentActionMagnitude(s, "nationalize", 12) * 0.9),
       choices: (c) => [
         { label: "Investigação independente", cost: 0, risk: "médio",
           shortTerm: ["Aprovação -3 no curto prazo"], longTerm: ["Credibilidade institucional +"],
@@ -3100,7 +3266,7 @@ input[type="range"]::-moz-range-thumb {
     },
     {
       id: "desastre_natural", label: "Desastre natural",
-      trigger: () => 0.02,
+      trigger: (c, s) => (Events.recentlyFired(s, "desastre_natural", 10) ? 0 : 0.012),
       choices: (c) => [
         { label: "Resposta emergencial completa", cost: c.economy.gdp * 0.012, risk: "baixo",
           shortTerm: ["Gasto público +", "Aprovação +4"], longTerm: ["Reconstrução mais rápida"],
@@ -3112,7 +3278,7 @@ input[type="range"]::-moz-range-thumb {
     },
     {
       id: "escassez_alimentos", label: "Escassez de alimentos",
-      trigger: (c) => (!hasResourceLike(c, ["terras_agricolas", "agricultura", "graos"]) && c.economy.inflation > 0.1 ? 0.025 : 0.004),
+      trigger: (c, s) => (Events.recentlyFired(s, "escassez_alimentos", 10) ? 0 : !hasResourceLike(c, ["terras_agricolas", "agricultura", "soja", "graos"]) && c.economy.inflation > 0.12 ? 0.018 : 0.003),
       choices: (c) => [
         { label: "Importar emergencialmente", cost: c.economy.gdp * 0.008, risk: "médio",
           shortTerm: ["Reservas cambiais -"], longTerm: ["Crise contida"],
@@ -3124,7 +3290,7 @@ input[type="range"]::-moz-range-thumb {
     },
     {
       id: "crise_migratoria", label: "Crise migratória",
-      trigger: (c) => (c.stability < 35 ? 0.03 : 0.006),
+      trigger: (c, s) => (Events.recentlyFired(s, "crise_migratoria", 10) ? 0 : c.stability < 32 ? 0.02 : 0.004),
       choices: (c) => [
         { label: "Acolhimento estruturado", cost: c.economy.gdp * 0.006, risk: "médio",
           shortTerm: ["Gasto social +"], longTerm: ["Força de trabalho + no longo prazo"],
@@ -3136,11 +3302,11 @@ input[type="range"]::-moz-range-thumb {
     },
     {
       id: "terrorismo", label: "Ameaça terrorista",
-      trigger: (c) => (c.stability < 40 ? 0.028 : 0.005),
+      trigger: (c, s) => (Events.recentlyFired(s, "terrorismo", 10) ? 0 : c.stability < 38 ? 0.018 : 0.003),
       choices: (c) => [
         { label: "Reforçar segurança e inteligência", cost: c.economy.gdp * 0.006, risk: "baixo",
           shortTerm: ["Gasto com segurança +"], longTerm: ["Estabilidade preservada"],
-          apply: (c) => { c.military.branches.intelligence.training = clamp(c.military.branches.intelligence.training + 5, 0, 100); c.stability = clamp(c.stability + 2, 0, 100); } },
+          apply: (c) => { c.espionage.counterIntel = clamp(c.espionage.counterIntel + 5, 0, 100); c.stability = clamp(c.stability + 2, 0, 100); } },
         { label: "Resposta militar dura", cost: c.economy.gdp * 0.01, risk: "alto",
           shortTerm: ["Aprovação +"], longTerm: ["Risco de radicalização/retaliação"],
           apply: (c) => { c.approval = clamp(c.approval + 3, 0, 100); c.stability = clamp(c.stability - 2, 0, 100); } },
@@ -3148,7 +3314,7 @@ input[type="range"]::-moz-range-thumb {
     },
     {
       id: "guerra_civil", label: "Risco de guerra civil",
-      trigger: (c) => (c.stability < 20 ? 0.025 : 0),
+      trigger: (c, s) => (Events.recentlyFired(s, "guerra_civil", 18) ? 0 : c.stability < 18 ? 0.02 : 0),
       choices: (c) => [
         { label: "Negociação e reformas", cost: c.economy.gdp * 0.01, risk: "médio",
           shortTerm: ["Concessões políticas"], longTerm: ["Estabilidade recupera aos poucos"],
@@ -3160,7 +3326,7 @@ input[type="range"]::-moz-range-thumb {
     },
     {
       id: "crise_constitucional", label: "Crise constitucional",
-      trigger: (c) => (c.approval < 15 && (c.govType === "autoritario" || c.govType === "presidencialista") ? 0.02 : 0),
+      trigger: (c, s) => (Events.recentlyFired(s, "crise_constitucional", 18) ? 0 : c.approval < 14 && (c.govType === "autoritario" || c.govType === "presidencialista") ? 0.016 : 0),
       choices: (c) => [
         { label: "Convocar eleições antecipadas", cost: 0, risk: "alto",
           shortTerm: ["Incerteza política"], longTerm: ["Legitimidade pode se renovar"],
@@ -3371,6 +3537,7 @@ input[type="range"]::-moz-range-thumb {
       treaties: [],
       wars: [],
       events: { active: [], log: [] },
+      recentActions: [],
       news: ["🏛 Novo governo empossado em " + countries[countryId].namePt + "."],
       history: { years: [], months: [] },
     };
@@ -3400,11 +3567,14 @@ input[type="range"]::-moz-range-thumb {
       root.WP.Economy.monthlyTick(c, { atWar, sanctioned });
       root.WP.Military.monthlyTick(c);
       root.WP.Technology.monthlyTick(c);
+      root.WP.Buildings.monthlyTick(c);
+      root.WP.Espionage.monthlyTick(c);
     });
 
     root.WP.AI.monthlyTick(state);
     root.WP.Diplomacy.monthlyTick(state);
     root.WP.War.monthlyTick(state);
+    root.WP.Market.monthlyTick(state);
 
     Object.keys(state.countries).forEach((id) => {
       const c = state.countries[id];
@@ -3714,9 +3884,27 @@ input[type="range"]::-moz-range-thumb {
     document.getElementById("country-select-screen").style.display = "none";
     document.getElementById("game-screen").style.display = "";
     UI.renderGame();
+    UI.setupAutoAdvance();
+  };
+
+  // Avanço automático: com o jogo "em play" (não pausado), 1 ano passa sozinho a cada
+  // 5 minutos reais - sem precisar ficar tocando em "+1 ano" toda hora.
+  UI.AUTO_ADVANCE_MS = 5 * 60 * 1000;
+  UI._autoTimer = null;
+  UI.setupAutoAdvance = function () {
+    if (UI._autoTimer) clearInterval(UI._autoTimer);
+    UI._autoTimer = setInterval(() => {
+      if (!UI.gameState || UI.gameState.time.paused) return;
+      if (UI.gameState.events.active.length > 0) return; // espera resolver evento pendente
+      UI.toggleTimeOrAdvance(12);
+    }, UI.AUTO_ADVANCE_MS);
+  };
+  UI.stopAutoAdvance = function () {
+    if (UI._autoTimer) { clearInterval(UI._autoTimer); UI._autoTimer = null; }
   };
 
   UI.backToMenu = function () {
+    UI.stopAutoAdvance();
     document.getElementById("game-screen").style.display = "none";
     document.getElementById("country-select-screen").style.display = "";
     UI.renderSelectScreen();
@@ -3748,7 +3936,7 @@ input[type="range"]::-moz-range-thumb {
         <div class="tb-stat"><span class="tb-label">Apoio</span><span class="tb-value ${c.approval < 30 ? "tb-bad" : c.approval > 55 ? "tb-good" : ""}">${UI.fmtNum(c.approval)}%</span></div>
       </div>
       <div class="tb-time">
-        <button class="tb-timebtn" data-action="time" data-months="0">${s.time.paused ? "▶ Continuar" : "⏸ Pausar"}</button>
+        <button class="tb-timebtn ${s.time.paused ? "" : "playing"}" data-action="time" data-months="0">${s.time.paused ? "▶ Play (auto 1 ano/5min)" : "⏸ Pausar"}</button>
         <button class="tb-timebtn" data-action="time" data-months="1">+1 mês</button>
         <button class="tb-timebtn" data-action="time" data-months="3">+3 meses</button>
         <button class="tb-timebtn" data-action="time" data-months="6">+6 meses</button>
@@ -3813,7 +4001,7 @@ input[type="range"]::-moz-range-thumb {
     else if (action === "time") UI.toggleTimeOrAdvance(parseInt(el.getAttribute("data-months"), 10));
     else if (action === "back-to-menu") { if (confirm("Voltar ao menu? O progresso não salvo será perdido.")) UI.backToMenu(); }
     else if (action === "open-country-detail") root.WP.UI.Modals.showCountryDetail(UI.gameState, el.getAttribute("data-id"));
-    else if (UI.Screens[UI.state.tab] && UI.Screens[UI.state.tab].onAction) UI.Screens[UI.state.tab].onAction(action, el, UI.gameState);
+    else if (UI.state.screen === "game" && UI.Screens[UI.state.tab] && UI.Screens[UI.state.tab].onAction) UI.Screens[UI.state.tab].onAction(action, el, UI.gameState);
   });
 })(typeof window !== "undefined" ? window : global);
 
@@ -3926,12 +4114,14 @@ input[type="range"]::-moz-range-thumb {
     monarquia_absoluta: "Monarquia absoluta", comunista: "Estado de partido único", autoritario: "Regime autoritário",
     teocracia: "Teocracia", militar: "Junta militar",
   };
+  const MODEL_LABELS = { misto: "Misto", liberal: "Liberal (livre-mercado)", socialista: "Socialista", nacionalista: "Nacionalista" };
 
   UI.Screens.governo = {
     render(state) {
       const c = state.countries[state.playerCountryId];
       const months = state.history.months.slice(-UI.state.chartRange * 12);
       const rangeBtns = [5, 10, 25, 50].map((y) => `<button class="range-btn ${UI.state.chartRange === y ? "active" : ""}" data-action="gov-range" data-range="${y}">${y}a</button>`).join("");
+      const b = root.WP.Buildings.ensure(c);
 
       return `
         <div class="panel hero-panel">
@@ -3952,8 +4142,35 @@ input[type="range"]::-moz-range-thumb {
             <div class="kv"><span class="kv-k">População</span><span class="kv-v">${UI.fmtPop(c.population)}</span></div>
             <div class="kv"><span class="kv-k">Estabilidade</span><span class="kv-v">${UI.fmtNum(c.stability)}/100</span></div>
             <div class="kv"><span class="kv-k">Próxima eleição</span><span class="kv-v">${c.government.noCompetitiveElections ? "Sem eleições competitivas" : Math.max(0, c.government.monthsUntilElection) + " meses"}</span></div>
-            <div class="kv"><span class="kv-k">Banco central</span><span class="kv-v">${c.centralBank.independent ? "Independente" : "Subordinado ao governo"}</span></div>
+            <div class="kv"><span class="kv-k">Aprovação por renda</span><span class="kv-v">baixa ${UI.fmtNum(c.approvalGroups.low)} · média ${UI.fmtNum(c.approvalGroups.medium)} · alta ${UI.fmtNum(c.approvalGroups.high)}</span></div>
           </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Leis</div>
+          <div class="kv"><span class="kv-k">Banco Central independente</span><span class="kv-v">${c.centralBank.independent ? "Sim" : "Não"}</span></div>
+          <button class="btn-secondary" data-action="toggle-law" data-law="centralBank">${c.centralBank.independent ? "Acabar com a independência do BC (definir juros você mesmo)" : "Restaurar independência do Banco Central"}</button>
+          <div class="kv" style="margin-top:10px"><span class="kv-k">Lei de Segurança Nacional</span><span class="kv-v">${c.laws.leiSegurancaNacional ? "Em vigor" : "Não vigora"}</span></div>
+          <button class="btn-secondary" data-action="toggle-law" data-law="seguranca">${c.laws.leiSegurancaNacional ? "Revogar Lei de Segurança Nacional" : "Aprovar Lei de Segurança Nacional (+estabilidade, -aprovação)"}</button>
+          <div class="kv" style="margin-top:10px"><span class="kv-k">Reforma Trabalhista</span><span class="kv-v">${c.laws.reformaTrabalhista ? "Em vigor" : "Não vigora"}</span></div>
+          <button class="btn-secondary" data-action="toggle-law" data-law="trabalhista">${c.laws.reformaTrabalhista ? "Revogar Reforma Trabalhista" : "Aprovar Reforma Trabalhista (-desemprego estrutural)"}</button>
+          <div class="kv" style="margin-top:10px"><span class="kv-k">Modelo econômico</span><span class="kv-v">${MODEL_LABELS[c.laws.modeloEconomico]}</span></div>
+          <div class="save-row">
+            ${Object.keys(MODEL_LABELS).map((k) => `<button class="btn-secondary small ${c.laws.modeloEconomico === k ? "active" : ""}" data-action="set-model" data-model="${k}">${MODEL_LABELS[k]}</button>`).join("")}
+          </div>
+          <div class="note">Liberal: menos peso de imposto no crescimento, aprovação sobe entre renda alta. Socialista: aprovação sobe entre renda baixa. Nacionalista: pequeno bônus de aprovação e crescimento.</div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Construções</div>
+          ${Object.keys(root.WP.Buildings.TYPES).map((k) => {
+            const def = root.WP.Buildings.TYPES[k];
+            return `<div class="build-row">
+              <div class="kv"><span class="kv-k">${def.label} (nível ${b[k].level})</span><span class="kv-v"><button class="btn-secondary small" data-action="build-gov" data-key="${k}">Construir (${UI.fmtMoney(root.WP.Buildings.cost(c, k))})</button></span></div>
+              <div class="note build-benefit">${def.benefit}</div>
+            </div>`;
+          }).join("")}
+          <div class="note">Construções são ilimitadas, mas cada nível fica um pouco mais caro que o anterior.</div>
         </div>
 
         <div class="panel">
@@ -3989,10 +4206,32 @@ input[type="range"]::-moz-range-thumb {
       }
     },
     onAction(action, el, state) {
+      const c = state.countries[state.playerCountryId];
       if (action === "gov-range") { UI.state.chartRange = parseInt(el.getAttribute("data-range"), 10); UI.renderScreenContent(); }
       else if (action === "save-slot") {
         const ok = root.WP.Save.save(state, el.getAttribute("data-slot"));
         UI.toast(ok ? "Jogo salvo." : "Não foi possível salvar.");
+      } else if (action === "toggle-law") {
+        const law = el.getAttribute("data-law");
+        const magnitude = 0.22;
+        const result = root.WP.Politics.evaluatePolicyChange(c, magnitude, law === "trabalhista" ? 1 : -1);
+        if (!result.approved) { UI.toast("O Congresso rejeitou essa mudança de lei."); return; }
+        if (law === "centralBank") c.centralBank.independent = !c.centralBank.independent;
+        else if (law === "seguranca") { c.laws.leiSegurancaNacional = !c.laws.leiSegurancaNacional; if (c.laws.leiSegurancaNacional) c.approval = Math.max(0, c.approval - 3); }
+        else if (law === "trabalhista") c.laws.reformaTrabalhista = !c.laws.reformaTrabalhista;
+        root.WP.Save.autosave(state);
+        UI.toast(result.note);
+        UI.rerender();
+      } else if (action === "set-model") {
+        root.WP.Politics.setEconomicModel(c, el.getAttribute("data-model"));
+        root.WP.Save.autosave(state);
+        UI.rerender();
+      } else if (action === "build-gov") {
+        const key = el.getAttribute("data-key");
+        const result = root.WP.Buildings.build(c, key);
+        UI.toast(`${root.WP.Buildings.TYPES[key].label} agora no nível ${result.newLevel} (custou ${UI.fmtMoney(result.cost)}).`);
+        root.WP.Save.autosave(state);
+        UI.rerender();
       }
     },
   };
@@ -4006,8 +4245,12 @@ input[type="range"]::-moz-range-thumb {
   const UI = root.WP.UI;
   const Politics = root.WP.Politics;
 
+  const BRACKET_FIELDS = [
+    { key: "low", label: "Imposto de renda - faixa baixa", max: 0.5 },
+    { key: "medium", label: "Imposto de renda - faixa média", max: 0.55 },
+    { key: "high", label: "Imposto de renda - faixa alta", max: 0.6 },
+  ];
   const TAX_FIELDS = [
-    { key: "income", label: "Imposto de renda", max: 0.55 },
     { key: "corporate", label: "Imposto corporativo", max: 0.45 },
     { key: "vat", label: "IVA / consumo", max: 0.27 },
     { key: "importTariff", label: "Tarifa de importação", max: 0.35 },
@@ -4028,6 +4271,11 @@ input[type="range"]::-moz-range-thumb {
     { key: "energy", label: "Energia", max: 0.15, leaning: 0 },
     { key: "admin", label: "Administração", max: 0.15, leaning: 0 },
   ];
+  const SECTOR_LABELS = {
+    industrial: "Indústria", agro: "Agronegócio", comercio: "Comércio", servicos: "Serviços",
+    digital: "Tecnologia/Digital", saude_privada: "Saúde privada", petroleo_gas: "Petróleo e gás",
+    automotivo: "Automotivo", financas: "Finanças", energia: "Energia", turismo: "Turismo",
+  };
 
   function sliderRow(field, value, unit) {
     const pct = (value * 100).toFixed(1);
@@ -4044,7 +4292,12 @@ input[type="range"]::-moz-range-thumb {
       const rev = root.WP.Fiscal.computeRevenue(c);
       const spend = root.WP.Fiscal.computeSpending(c);
       const balance = rev.total - spend.total;
+      const sectors = root.WP.Companies ? (function () { const s = Object.assign({}, c.sectors); if (!s.financas) s.financas = { share: 0.08 }; return s; })() : c.sectors;
+      const companies = root.WP.Companies.ensure(c);
+      const instruments = root.WP.Market.listInstruments(state);
+      const bonds = root.WP.Market.ensure(state).bonds;
 
+      BRACKET_FIELDS.forEach((x) => (x._kind = "bracket"));
       TAX_FIELDS.forEach((x) => (x._kind = "tax"));
       SPEND_FIELDS.forEach((x) => (x._kind = "spend"));
 
@@ -4064,6 +4317,16 @@ input[type="range"]::-moz-range-thumb {
         </div>
 
         <div class="panel">
+          <div class="panel-title">Setores da economia</div>
+          ${Object.keys(sectors).filter((k) => sectors[k].share > 0).map((k) => {
+            const bonus = root.WP.Buildings.sectorBonus(c, k);
+            const output = e.gdp * sectors[k].share * (1 + bonus);
+            return `<div class="kv"><span class="kv-k">${SECTOR_LABELS[k] || k}${bonus > 0 ? ` (+${(bonus * 100).toFixed(0)}% construções)` : ""}</span><span class="kv-v">${UI.fmtMoney(output)}</span></div>`;
+          }).join("")}
+          <div class="note">Infraestrutura e fábricas (aba Governo → Construções) aumentam a eficiência de cada setor.</div>
+        </div>
+
+        <div class="panel">
           <div class="panel-title">Comércio exterior</div>
           <div class="kv-grid">
             <div class="kv"><span class="kv-k">Exportações</span><span class="kv-v">${UI.fmtMoney(e.exports)}/ano</span></div>
@@ -4076,7 +4339,7 @@ input[type="range"]::-moz-range-thumb {
           <div class="panel-title">Banco Central</div>
           ${c.centralBank.independent
             ? `<div class="kv"><span class="kv-k">Taxa de juros (definida com independência)</span><span class="kv-v">${UI.fmtPct(c.centralBank.policyRate)}</span></div>
-               <div class="note">Este banco central é independente e reage à inflação e ao crescimento automaticamente.</div>`
+               <div class="note">Este banco central é independente e reage à inflação e ao crescimento automaticamente. Mude isso em Governo → Leis.</div>`
             : `<div class="slider-row" data-field="policyRate">
                  <div class="slider-head"><span>Taxa de juros (controle direto do governo)</span><span class="slider-val">${(c.centralBank.policyRate * 100).toFixed(1)}%</span></div>
                  <input type="range" min="-0.02" max="0.6" step="0.001" value="${c.centralBank.policyRate}" data-field="policyRate" data-kind="rate" />
@@ -4085,7 +4348,13 @@ input[type="range"]::-moz-range-thumb {
         </div>
 
         <div class="panel">
-          <div class="panel-title">Impostos</div>
+          <div class="panel-title">Impostos de renda por faixa</div>
+          ${BRACKET_FIELDS.map((x) => sliderRow(x, f.incomeBrackets[x.key])).join("")}
+          <div class="note">Aumentar a alíquota de uma faixa atinge principalmente a aprovação desse grupo (aba Governo mostra o detalhamento) - o efeito é maior quanto mais alta a alíquota já estiver.</div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Outros impostos</div>
           ${TAX_FIELDS.map((x) => sliderRow(x, f.taxRates[x.key])).join("")}
         </div>
 
@@ -4104,13 +4373,54 @@ input[type="range"]::-moz-range-thumb {
           <button class="btn-primary" data-action="apply-economy">Aplicar mudanças</button>
           <div class="note">Mudanças pequenas valem na hora. Reformas grandes em impostos ou em áreas politicamente sensíveis (saúde, defesa, previdência...) passam pelo Congresso e podem ser aprovadas, reduzidas ou rejeitadas.</div>
         </div>
+
+        <div class="panel">
+          <div class="panel-title">Estatização</div>
+          <div class="world-list" style="max-height:280px">
+            ${companies.slice(0, 30).map((co) => `
+              <div class="world-row" style="cursor:default">
+                <span class="wr-name">${UI.esc(co.name)} <span class="note" style="display:inline">(${co.sectorLabel})</span></span>
+                <span class="wr-rel">${UI.fmtMoney(co.value)}</span>
+                ${co.state ? `<span class="wr-rel" style="color:#C9A24B">Estatal</span>` : `<button class="btn-secondary small" data-action="nationalize" data-id="${co.id}">Estatizar</button>`}
+              </div>`).join("")}
+          </div>
+          <div class="note">Estatizar custa o valor da empresa. O desempenho depois pode melhorar ou piorar, dependendo da gestão.</div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Bolsa de valores (fundo soberano)</div>
+          <div class="world-list" style="max-height:280px">
+            ${instruments.map((inst) => {
+              const h = state.market.holdings[inst.id];
+              return `<div class="world-row" style="cursor:default">
+                <span class="wr-name" data-action="show-chart" data-id="${inst.id}" data-name="${UI.esc(inst.name)}" style="cursor:pointer;text-decoration:underline dotted">${UI.esc(inst.name)} <span class="note" style="display:inline">(${inst.sector}${inst.domestic ? "" : " · intl"})</span></span>
+                <span class="wr-rel">${inst.price.toFixed(2)} pts${h ? ` · investido ${UI.fmtMoney(h.invested)}` : ""}</span>
+                <button class="btn-secondary small" data-action="invest" data-id="${inst.id}">Investir</button>
+                ${h && h.qty > 0 ? `<button class="btn-secondary small" data-action="divest" data-id="${inst.id}">Vender</button>` : ""}
+              </div>`;
+            }).join("")}
+          </div>
+          <div class="note">O fundo soberano investe reservas do tesouro. Ações domésticas seguem o crescimento do seu país; internacionais seguem uma tendência global genérica.</div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Tesouro Direto</div>
+          <div class="kv-grid">
+            ${Object.keys(bonds).length ? Object.keys(bonds).map((id) => `<div class="kv"><span class="kv-k">Título de ${UI.esc(state.countries[id].namePt)}</span><span class="kv-v">${UI.fmtMoney(bonds[id].principal)} (${(bonds[id].rate * 100).toFixed(1)}%/ano) <button class="btn-secondary small" data-action="redeem-bond" data-id="${id}">Resgatar</button></span></div>`).join("") : '<div class="note">Nenhum título comprado ainda.</div>'}
+          </div>
+          <div class="save-row">
+            <input type="text" id="bond-country" class="country-search" placeholder="Código do país (ex: USA, DEU, JPN)" style="margin-bottom:0" />
+            <button class="btn-secondary" data-action="buy-bond">Comprar título (1 bi)</button>
+          </div>
+          <div class="note">O rendimento acompanha a taxa de juros e o risco de dívida do país emissor.</div>
+        </div>
       `;
     },
     afterRender(state, container) {
       container.querySelectorAll('input[type="range"]').forEach((input) => {
         input.addEventListener("input", () => {
           const row = input.closest(".slider-row");
-          const unit = input.dataset.kind === "rate" || input.dataset.kind === "tax" || input.dataset.kind === "spend" ? "%" : "";
+          const unit = "%";
           row.querySelector(".slider-val").textContent = (parseFloat(input.value) * 100).toFixed(1) + unit;
         });
       });
@@ -4124,45 +4434,107 @@ input[type="range"]::-moz-range-thumb {
       }
     },
     onAction(action, el, state) {
-      if (action !== "apply-economy") return;
-      const container = document.getElementById("screen-content");
       const c = state.countries[state.playerCountryId];
-      let approvedCount = 0, reducedCount = 0, rejectedCount = 0;
+      if (action === "apply-economy") {
+        const container = document.getElementById("screen-content");
+        let approvedCount = 0, reducedCount = 0, rejectedCount = 0;
 
-      container.querySelectorAll('[data-kind="tax"]').forEach((input) => {
-        const key = input.dataset.field;
-        const newVal = parseFloat(input.value);
-        const oldVal = c.fiscal.taxRates[key];
-        const diff = newVal - oldVal;
-        if (Math.abs(diff) < 0.0015) return;
-        const leaning = diff > 0 ? -1 : 1;
-        const result = Politics.evaluatePolicyChange(c, Math.abs(diff), leaning);
-        if (!result.approved) { rejectedCount++; return; }
-        c.fiscal.taxRates[key] = oldVal + diff * result.factor;
-        if (result.factor < 1) reducedCount++; else approvedCount++;
-      });
+        BRACKET_FIELDS.forEach((field) => {
+          const input = container.querySelector('[data-kind="bracket"][data-field="' + field.key + '"]');
+          if (!input) return;
+          const newVal = parseFloat(input.value);
+          const oldVal = c.fiscal.incomeBrackets[field.key];
+          const diff = newVal - oldVal;
+          if (Math.abs(diff) < 0.0015) return;
+          const leaning = diff > 0 ? -1 : 1;
+          const result = Politics.evaluatePolicyChange(c, Math.abs(diff), leaning);
+          if (!result.approved) { rejectedCount++; return; }
+          const appliedDiff = diff * result.factor;
+          c.fiscal.incomeBrackets[field.key] = oldVal + appliedDiff;
+          Politics.applyBracketTaxChange(c, field.key, appliedDiff);
+          root.WP.Events.logAction(state, "tax_hike_" + field.key, Math.max(0, appliedDiff));
+          if (result.factor < 1) reducedCount++; else approvedCount++;
+        });
 
-      SPEND_FIELDS.forEach((field) => {
-        const input = container.querySelector('[data-kind="spend"][data-field="' + field.key + '"]');
-        if (!input) return;
-        const newVal = parseFloat(input.value);
-        const oldVal = c.fiscal.spendingGdp[field.key];
-        const diff = newVal - oldVal;
-        if (Math.abs(diff) < 0.0015) return;
-        if (field.leaning === 0) { c.fiscal.spendingGdp[field.key] = newVal; approvedCount++; return; }
-        const leaning = field.leaning > 0 ? (diff > 0 ? 1 : -1) : diff > 0 ? -1 : 1;
-        const result = Politics.evaluatePolicyChange(c, Math.abs(diff) * 2.5, leaning);
-        if (!result.approved) { rejectedCount++; return; }
-        c.fiscal.spendingGdp[field.key] = oldVal + diff * result.factor;
-        if (result.factor < 1) reducedCount++; else approvedCount++;
-      });
+        container.querySelectorAll('[data-kind="tax"]').forEach((input) => {
+          const key = input.dataset.field;
+          const newVal = parseFloat(input.value);
+          const oldVal = c.fiscal.taxRates[key];
+          const diff = newVal - oldVal;
+          if (Math.abs(diff) < 0.0015) return;
+          const leaning = diff > 0 ? -1 : 1;
+          const result = Politics.evaluatePolicyChange(c, Math.abs(diff), leaning);
+          if (!result.approved) { rejectedCount++; return; }
+          c.fiscal.taxRates[key] = oldVal + diff * result.factor;
+          if (result.factor < 1) reducedCount++; else approvedCount++;
+        });
 
-      const rateInput = container.querySelector('[data-field="policyRate"]');
-      if (rateInput && !c.centralBank.independent) c.centralBank.policyRate = parseFloat(rateInput.value);
+        SPEND_FIELDS.forEach((field) => {
+          const input = container.querySelector('[data-kind="spend"][data-field="' + field.key + '"]');
+          if (!input) return;
+          const newVal = parseFloat(input.value);
+          const oldVal = c.fiscal.spendingGdp[field.key];
+          const diff = newVal - oldVal;
+          if (Math.abs(diff) < 0.0015) return;
+          if (field.leaning === 0) { c.fiscal.spendingGdp[field.key] = newVal; approvedCount++; return; }
+          const leaning = field.leaning > 0 ? (diff > 0 ? 1 : -1) : diff > 0 ? -1 : 1;
+          const result = Politics.evaluatePolicyChange(c, Math.abs(diff) * 2.5, leaning);
+          if (!result.approved) { rejectedCount++; return; }
+          c.fiscal.spendingGdp[field.key] = oldVal + diff * result.factor;
+          if (diff < 0) root.WP.Events.logAction(state, "spending_cut", Math.abs(diff) * 3);
+          if (result.factor < 1) reducedCount++; else approvedCount++;
+        });
 
-      root.WP.Save.autosave(state);
-      UI.toast(`Aplicado: ${approvedCount} aprovada(s), ${reducedCount} reduzida(s), ${rejectedCount} rejeitada(s) pelo Congresso.`);
-      UI.rerender();
+        const rateInput = container.querySelector('[data-field="policyRate"]');
+        if (rateInput && !c.centralBank.independent) c.centralBank.policyRate = parseFloat(rateInput.value);
+
+        root.WP.Save.autosave(state);
+        UI.toast(`Aplicado: ${approvedCount} aprovada(s), ${reducedCount} reduzida(s), ${rejectedCount} rejeitada(s) pelo Congresso.`);
+        UI.rerender();
+      } else if (action === "nationalize") {
+        const id = el.getAttribute("data-id");
+        if (!confirm("Estatizar essa empresa? O custo é o valor de mercado dela.")) return;
+        const result = root.WP.Companies.nationalize(state, c, id);
+        if (!result.ok) { UI.toast(result.reason); return; }
+        root.WP.Events.logAction(state, "nationalize", 1);
+        root.WP.Save.autosave(state);
+        UI.toast(`Estatizada por ${UI.fmtMoney(result.cost)}. Desempenho pós-estatização: ${(result.performanceModifier * 100).toFixed(0)}%.`);
+        UI.rerender();
+      } else if (action === "show-chart") {
+        root.WP.UI.Modals.showInstrumentChart(state, el.getAttribute("data-id"), el.getAttribute("data-name"));
+      } else if (action === "invest") {
+        const id = el.getAttribute("data-id");
+        const amount = parseFloat(prompt("Quanto investir (em bilhões USD)?", "1"));
+        if (!amount || amount <= 0) return;
+        const result = root.WP.Market.invest(state, id, amount);
+        if (!result.ok) { UI.toast(result.reason); return; }
+        root.WP.Save.autosave(state);
+        UI.rerender();
+      } else if (action === "divest") {
+        const id = el.getAttribute("data-id");
+        const result = root.WP.Market.divest(state, id, 1);
+        if (!result.ok) { UI.toast(result.reason); return; }
+        UI.toast("Vendido por " + UI.fmtMoney(result.proceeds) + ".");
+        root.WP.Save.autosave(state);
+        UI.rerender();
+      } else if (action === "buy-bond") {
+        const container = document.getElementById("screen-content");
+        const input = container.querySelector("#bond-country");
+        const code = input ? input.value.trim().toUpperCase() : "";
+        if (!state.countries[code]) { UI.toast("Código de país inválido."); return; }
+        const result = root.WP.Market.buyBond(state, code, 1);
+        if (!result.ok) { UI.toast(result.reason); return; }
+        root.WP.Save.autosave(state);
+        UI.toast("Título comprado a " + (result.rate * 100).toFixed(1) + "%/ano.");
+        UI.rerender();
+      } else if (action === "redeem-bond") {
+        const id = el.getAttribute("data-id");
+        const result = root.WP.Market.redeemBond(state, id);
+        if (!result.ok) { UI.toast(result.reason); return; }
+        UI.toast("Resgatado: " + UI.fmtMoney(result.amount) + ".");
+        root.WP.Save.autosave(state);
+        UI.rerender();
+      }
     },
   };
 })(typeof window !== "undefined" ? window : global);
@@ -4341,21 +4713,25 @@ input[type="range"]::-moz-range-thumb {
 (function (root) {
   root.WP = root.WP || {};
   const UI = root.WP.UI;
+  const Military = root.WP.Military;
 
-  const BRANCH_LABELS = {
-    army: "Exército", navy: "Marinha", airforce: "Força Aérea", specialForces: "Forças Especiais",
-    reserves: "Reservas", airDefense: "Defesa Aérea", intelligence: "Inteligência", logistics: "Logística", industry: "Indústria Militar",
-  };
   const ALLOC_LABELS = {
     training: "Treinamento", maintenance: "Manutenção", recruitment: "Recrutamento",
     modernization: "Modernização", logistics: "Logística", infrastructure: "Infraestrutura",
   };
+
+  UI.militaryState = { buyQty: {} };
+
+  function fmtInt(n) {
+    return Math.round(n).toLocaleString("pt-BR");
+  }
 
   UI.Screens.defesa = {
     render(state) {
       const c = state.countries[state.playerCountryId];
       const m = c.military;
       const annualBudget = c.economy.gdp * m.budgetShareOfGdp;
+      const b = root.WP.Buildings.ensure(c);
 
       return `
         <div class="panel">
@@ -4364,10 +4740,38 @@ input[type="range"]::-moz-range-thumb {
             <div class="stat-box"><div class="stat-label">Poder militar (índice)</div><div class="stat-value">${m.powerIndex || 0}</div></div>
             <div class="stat-box"><div class="stat-label">Orçamento militar</div><div class="stat-value">${UI.fmtMoney(annualBudget)}/ano</div></div>
           </div>
+          <div class="stat-grid" style="margin-top:8px">
+            <div class="stat-box"><div class="stat-label">Treino</div><div class="stat-value">${m.readiness.training}/100</div></div>
+            <div class="stat-box"><div class="stat-label">Equipamento</div><div class="stat-value">${m.readiness.equipment}/100</div></div>
+            <div class="stat-box"><div class="stat-label">Moral</div><div class="stat-value">${m.readiness.morale}/100</div></div>
+            <div class="stat-box"><div class="stat-label">Logística</div><div class="stat-value">${((m.logisticsRatio || 1) * 100).toFixed(0)}%</div></div>
+          </div>
           <div class="slider-row" data-field="budgetShareOfGdp">
             <div class="slider-head"><span>Orçamento militar (% do PIB)</span><span class="slider-val">${(m.budgetShareOfGdp * 100).toFixed(1)}%</span></div>
             <input type="range" min="0" max="0.4" step="0.001" value="${m.budgetShareOfGdp}" data-field="budgetShareOfGdp" />
           </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Forças (unidades reais)</div>
+          ${Object.keys(Military.UNIT_TYPES).map((k) => {
+            const def = Military.UNIT_TYPES[k];
+            const count = m.units[k].count;
+            const unitCost = Military.unitCost(c, k);
+            const disabled = k === "navios" && c._landlocked;
+            return `<div class="unit-row">
+              <div class="unit-info">
+                <span class="unit-icon">${def.icon}</span>
+                <span class="unit-name">${def.label}</span>
+                <span class="unit-count">${fmtInt(count)}</span>
+              </div>
+              ${disabled ? '<div class="note">Sem litoral - não é possível ter marinha.</div>' : `
+              <div class="unit-buy">
+                <input type="number" min="0" step="1" placeholder="qtd." class="unit-qty-input" data-unit="${k}" />
+                <button class="btn-secondary small" data-action="buy-unit" data-unit="${k}">Comprar (${UI.fmtMoney(unitCost)}/un.)</button>
+              </div>`}
+            </div>`;
+          }).join("")}
         </div>
 
         <div class="panel">
@@ -4377,25 +4781,21 @@ input[type="range"]::-moz-range-thumb {
               <div class="slider-head"><span>${ALLOC_LABELS[k]}</span><span class="slider-val">${(m.allocation[k] * 100).toFixed(0)}%</span></div>
               <input type="range" min="0" max="1" step="0.01" value="${m.allocation[k]}" data-field="alloc-${k}" />
             </div>`).join("")}
-          <div class="note">Comprar equipamento sem manutenção/logística correspondente não aumenta a capacidade real - o desgaste corrói o que foi comprado.</div>
+          <div class="note">Comprar unidades sem manutenção/logística correspondente faz a prontidão cair - o desgaste corrói o que foi comprado.</div>
           <button class="btn-primary" data-action="apply-military">Aplicar</button>
         </div>
 
         <div class="panel">
-          <div class="panel-title">Forças por ramo</div>
-          ${Object.keys(BRANCH_LABELS).map((k) => {
-            const b = m.branches[k];
-            return `<div class="branch-row">
-              <div class="branch-name">${BRANCH_LABELS[k]}</div>
-              <div class="branch-bars">
-                <div class="mini-bar" title="Tamanho"><span style="width:${b.size}%"></span></div>
-                <div class="mini-bar train" title="Treino"><span style="width:${b.training}%"></span></div>
-                <div class="mini-bar equip" title="Equipamento"><span style="width:${b.equipment}%"></span></div>
-                <div class="mini-bar morale" title="Moral"><span style="width:${b.morale}%"></span></div>
-              </div>
-            </div>`;
-          }).join("")}
-          <div class="chart-legend"><span><i class="dot" style="background:#8B93A7"></i>Tamanho</span><span><i class="dot" style="background:#4FB7E8"></i>Treino</span><span><i class="dot" style="background:#C9A24B"></i>Equip.</span><span><i class="dot" style="background:#4CAF7D"></i>Moral</span></div>
+          <div class="panel-title">Base militar e Centro de Inteligência</div>
+          <div class="kv-grid">
+            <div class="kv"><span class="kv-k">Base Militar (nível ${b.base_militar.level})</span><span class="kv-v">Próximo: ${UI.fmtMoney(root.WP.Buildings.cost(c, "base_militar"))}</span></div>
+            <div class="kv"><span class="kv-k">Centro de Inteligência (nível ${b.centro_inteligencia.level})</span><span class="kv-v">Próximo: ${UI.fmtMoney(root.WP.Buildings.cost(c, "centro_inteligencia"))}</span></div>
+          </div>
+          <div class="save-row" style="margin-top:8px">
+            <button class="btn-secondary" data-action="build" data-key="base_militar">Construir Base Militar</button>
+            <button class="btn-secondary" data-action="build" data-key="centro_inteligencia">Construir Centro de Inteligência</button>
+          </div>
+          <div class="note">Base Militar melhora a logística (afeta a força em guerra). Centro de Inteligência acelera o acúmulo de pontos de espionagem (veja o país-alvo em Mundo → detalhes → Espionagem).</div>
         </div>
 
         <div class="panel">
@@ -4429,13 +4829,28 @@ input[type="range"]::-moz-range-thumb {
           const input = container.querySelector('[data-field="alloc-' + k + '"]');
           alloc[k] = input ? parseFloat(input.value) : c.military.allocation[k];
         });
-        root.WP.Military.setAllocation(c, alloc);
+        Military.setAllocation(c, alloc);
         root.WP.Save.autosave(state);
         UI.toast("Orçamento militar atualizado.");
         UI.rerender();
+      } else if (action === "buy-unit") {
+        const key = el.getAttribute("data-unit");
+        const container = document.getElementById("screen-content");
+        const qtyInput = container.querySelector('.unit-qty-input[data-unit="' + key + '"]');
+        const qty = qtyInput ? parseInt(qtyInput.value, 10) : 0;
+        if (!qty || qty <= 0) { UI.toast("Digite uma quantidade válida."); return; }
+        const result = Military.buyUnits(c, key, qty);
+        if (result && result.blocked) UI.toast(result.reason);
+        else { UI.toast(`Comprado: ${qty} ${Military.UNIT_TYPES[key].label} por ${UI.fmtMoney(result.totalCost)}.`); root.WP.Save.autosave(state); UI.rerender(); }
+      } else if (action === "build") {
+        const key = el.getAttribute("data-key");
+        const result = root.WP.Buildings.build(c, key);
+        UI.toast(`${root.WP.Buildings.TYPES[key].label} agora no nível ${result.newLevel} (custou ${UI.fmtMoney(result.cost)}).`);
+        root.WP.Save.autosave(state);
+        UI.rerender();
       } else if (action === "start-nuclear") {
         if (confirm("Iniciar um programa nuclear terá custo alto e reação diplomática imediata de todo o mundo. Continuar?")) {
-          root.WP.Military.startNuclearProgram(state, c);
+          Military.startNuclearProgram(state, c);
           root.WP.Save.autosave(state);
           UI.rerender();
         }
@@ -4560,6 +4975,14 @@ input[type="range"]::-moz-range-thumb {
         ${atWar
           ? `<button class="btn-secondary small" data-action="negotiate-peace" data-id="${countryId}">Negociar paz</button>`
           : `<button class="btn-danger small" data-action="declare-war" data-id="${countryId}">Declarar guerra</button>`}
+      </div>
+      <div class="panel-title" style="margin-top:14px">🕵 Espionagem (${Math.round(state.countries[state.playerCountryId].espionage.points)} pts disponíveis)</div>
+      <div class="modal-actions">
+        ${Object.keys(root.WP.Espionage.OPS).map((k) => {
+          const op = root.WP.Espionage.OPS[k];
+          if (op.requiresWar && !atWar) return "";
+          return `<button class="btn-secondary small" data-action="espionage-op" data-key="${k}" data-id="${countryId}" title="${UI.esc(op.desc)}">${op.label} (${op.cost} pts)</button>`;
+        }).join("")}
       </div>` : ""}
     `);
   };
@@ -4591,6 +5014,14 @@ input[type="range"]::-moz-range-thumb {
       const id = el.getAttribute("data-id");
       const war = (state.wars || []).find((w) => w.active && (w.attackers.includes(id) || w.defenders.includes(id)) && (w.attackers.includes(state.playerCountryId) || w.defenders.includes(state.playerCountryId)));
       if (war) { root.WP.War.negotiatePeace(state, war.id); root.WP.Save.autosave(state); close(); UI.rerender(); }
+    } else if (action === "espionage-op") {
+      const key = el.getAttribute("data-key");
+      const id = el.getAttribute("data-id");
+      const result = root.WP.Espionage.performOp(state, state.playerCountryId, id, key);
+      if (!result.ok) { UI.toast(result.reason); return; }
+      UI.toast(result.success ? "Operação bem-sucedida (chance era " + result.chance + "%)." : "Operação exposta! Relação piorou.");
+      root.WP.Save.autosave(state);
+      Modals.showCountryDetail(state, id);
     }
   });
 
@@ -4621,6 +5052,27 @@ input[type="range"]::-moz-range-thumb {
     close();
     UI.rerender();
   });
+
+  Modals.showInstrumentChart = function (state, instrumentId, name) {
+    const market = root.WP.Market.ensure(state);
+    const history = market.priceHistory[instrumentId] || [];
+    const price = market.prices[instrumentId] || 0;
+    const high = history.length ? Math.max(...history) : price;
+    const low = history.length ? Math.min(...history) : price;
+    open(`
+      <div class="modal-header"><div>${UI.esc(name)}</div><button class="modal-close" data-action="close-modal">✕</button></div>
+      <div class="kv-grid">
+        <div class="kv"><span class="kv-k">Preço atual</span><span class="kv-v">${price.toFixed(2)} pts</span></div>
+        <div class="kv"><span class="kv-k">Máxima / mínima (histórico)</span><span class="kv-v">${high.toFixed(2)} / ${low.toFixed(2)}</span></div>
+      </div>
+      <canvas id="instrument-chart" class="chart-canvas"></canvas>
+      <div class="note">${history.length < 2 ? "Ainda não há histórico suficiente - volte depois de avançar mais tempo." : "Últimos " + history.length + " meses."}</div>
+    `);
+    const canvas = document.getElementById("instrument-chart");
+    if (canvas && history.length > 1) {
+      root.WP.Charts.drawLineChart(canvas, [{ label: name, color: "#4FB7E8", values: history }], history.map((_, i) => "" + i), {});
+    }
+  };
 
   Modals.showElection = function (state, won) {
     const r = state.lastElectionResult || {};
