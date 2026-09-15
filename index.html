@@ -3663,12 +3663,46 @@ input[type="range"]::-moz-range-thumb {
     }
   };
 
+  // Preenche recursivamente qualquer campo que falte num objeto salvo, usando como molde
+  // um país recém-gerado com o código atual. Nunca sobrescreve o que já existe - só
+  // completa o que uma versão antiga do jogo não tinha ainda. Isso é o que permite abrir
+  // uma save salva antes de uma atualização sem quebrar.
+  function deepFillDefaults(target, source) {
+    if (typeof source !== "object" || source === null || Array.isArray(source)) return;
+    Object.keys(source).forEach((key) => {
+      if (target[key] === undefined) {
+        target[key] = JSON.parse(JSON.stringify(source[key]));
+      } else if (
+        typeof source[key] === "object" && source[key] !== null && !Array.isArray(source[key]) &&
+        typeof target[key] === "object" && target[key] !== null && !Array.isArray(target[key])
+      ) {
+        deepFillDefaults(target[key], source[key]);
+      }
+    });
+  }
+
+  Save.migrate = function (state) {
+    if (!state || !state.countries) return state;
+    if (!state.recentActions) state.recentActions = [];
+    if (!state.events) state.events = { active: [], log: [] };
+    Object.keys(state.countries).forEach((id) => {
+      let fresh;
+      try {
+        fresh = root.WP.Data.buildCountry(id);
+      } catch (e) {
+        fresh = null;
+      }
+      if (fresh) deepFillDefaults(state.countries[id], fresh);
+    });
+    return state;
+  };
+
   Save.load = function (slotId) {
     if (!available()) return null;
     const raw = localStorage.getItem(PREFIX + slotId);
     if (!raw) return null;
     try {
-      return JSON.parse(raw);
+      return Save.migrate(JSON.parse(raw));
     } catch (e) {
       return null;
     }

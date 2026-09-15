@@ -1,5 +1,5 @@
 // sw.js - cache-first: depois do primeiro carregamento, o jogo abre sem internet.
-const CACHE_NAME = "world-president-v2";
+const CACHE_NAME = "world-president-v3";
 const ASSETS = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (event) => {
